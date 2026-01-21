@@ -24,6 +24,9 @@
   let FETCHED = false;
   let KOROMONS_PROMISE = null;
   let ID_VALUE_MAP = new Map();
+  let lastUserId = null;
+  let rapInflight = false;
+  let rapToken = 0;
 
   function getProfileRoot() {
     return document.querySelector("main") || document.body;
@@ -46,25 +49,26 @@
     return null;
   }
 
-  async function apply(id) {
-    if (!id) return;
 
-    const root = getProfileRoot();
-    const el = getRAPNode(root);
-    if (!el) return;
+async function apply(id) {
+  if (!id || rapInflight) return;
 
-    if (lastUserId !== id) {
-      el.textContent = "...";
-      lastUserId = id;
-    }
+  const root = getProfileRoot();
+  const el = getRAPNode(root);
+  if (!el) return;
 
-    if (el.textContent !== "...") return;
-
+  rapInflight = true;
+  try {
     const rap = await fetchRAP(id);
     if (typeof rap !== "number") return;
 
-    el.textContent = rap.toLocaleString();
+    const shown = Number(el.textContent.replace(/[^\d]/g, ""));
+    if (shown !== rap) el.textContent = rap.toLocaleString();
+  } finally {
+    rapInflight = false;
   }
+}
+
 
   function buildIdValueMap() {
   ID_VALUE_MAP.clear();
@@ -115,7 +119,7 @@ function loadKoromons() {
       },
 
       onerror() {
-        FETCHED = true;              // IMPORTANT: stop retries
+        FETCHED = true;
         KOROMONS_PROMISE = null;
         resolve({ ITEMS: [], NAME_VALUE_MAP });
       },
@@ -323,7 +327,7 @@ function loadKoromons() {
 (async () => {
   if (!userId) return;
 
-  const total = await fetchKoromonsUserTotal(userId);
+  const total = await fetchKoromonsUserStats(userId);
   if (typeof total !== "number") return;
 
   const RAPelement = [...document.querySelectorAll(".fw-bolder")]
@@ -595,20 +599,27 @@ function loadKoromons() {
 }
 
 
-  async function runProfileInjector(retry = true) {
-    const m = location.pathname.match(/^\/users\/(\d+)\/profile/);
-    if (!m) {
-      removeProfileValue();
-      return;
-    }
-    const userId = m[1];
-    injectProfileLeaderboardRank(userId);
+async function runProfileInjector(retry = true) {
+  const m = location.pathname.match(/^\/users\/(\d+)\/profile/);
+  if (!m) {
+    lastUserId = null;
+    removeProfileValue();
+    return;
+  }
 
-      apply(userId);
-  new MutationObserver(apply(userId)).observe(document.body, {
-    childList: true,
-    subtree: true
-  });
+  const userId = m[1];
+
+  if (lastUserId !== userId) {
+    lastUserId = userId;
+
+    rapInflight = false;
+    rapToken++;
+
+    removeProfileValue();
+  }
+
+  injectProfileLeaderboardRank(userId);
+  apply(userId);
     const statsList = [...document.querySelectorAll("[class]")].find((el) =>
       hasClassPrefix(el, "relationshipList")
     );
@@ -701,6 +712,22 @@ function loadKoromons() {
     runner();
 
     let domDirty = true;
+
+
+let lastProfileURL = location.href;
+
+setInterval(() => {
+  if (location.href !== lastProfileURL) {
+    lastProfileURL = location.href;
+
+    if (/^https:\/\/www\.pekora\.zip\/users\/\d+\/profile/.test(location.href)) {
+      lastUserId = null;
+      rapInflight = false;
+      removeProfileValue();
+      runProfileInjector();
+    }
+  }
+}, 300);
 
 const domObserver = new MutationObserver(() => {
   scheduleRunner();
